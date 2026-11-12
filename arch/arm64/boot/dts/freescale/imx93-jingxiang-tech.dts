@@ -650,11 +650,12 @@
 	// 	};
 	// };
 
-	sc020: sc020hgs_mipi@30 {
+	sc020: sc020hgs@30 {
 		compatible = "smartsens,sc020hgs";
 		reg = <0x30>;
 		clocks = <&clk IMX93_CLK_24M>;
-		reset-gpios = <&adp5585 0 GPIO_ACTIVE_LOW>; // keep the same as ap1302 reset-gpios
+		// reset-gpios = <&adp5585 0 GPIO_ACTIVE_LOW>; // keep the same as ap1302 reset-gpios
+		reset-gpios = <&adp5585 0 GPIO_ACTIVE_HIGH>;
 		orientation = <2>;
 		rotation = <0>;
 		status = "okay";
