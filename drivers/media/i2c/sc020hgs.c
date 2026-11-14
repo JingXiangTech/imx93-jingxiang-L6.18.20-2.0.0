@@ -30,21 +30,26 @@
 
 #define SC020_WIDTH			400
 #define SC020_HEIGHT		400
-#define SC020_HTS			600	/* 0x320C/D: 400 有效 + 200 消隐 */
-#define SC020_VTS			450	/* 0x320E/F: 400 有效 + 50 消隐 */
+// #define SC020_HTS			600	/* 0x320C/D: 400 有效 + 200 消隐 */
+// #define SC020_VTS			450	/* 0x320E/F: 400 有效 + 50 消隐 */
+
+#define SC020HGS_DATA_LANES 1
 
 #ifdef SUPPORT_10BIT
 #define SC020HGS_DEFAULT_CODE MEDIA_BUS_FMT_Y10_1X10
 /* 帧率 = FPCLK / (HTS x VTS) = 64.8M / 270000 = 240fps */
-#define SC020_PIXEL_RATE		64800000ULL
+// #define SC020_PIXEL_RATE		64800000ULL
 /* V4L2 link freq = 每 lane 线速率的一半(DDR): 648Mbps / 2 */
 // #define SC020_LINK_FREQ_648MBPS		324000000ULL
 #define SC020_LINK_FREQ		324000000ULL
+#define SC020_PIXEL_RATE (SC020_LINK_FREQ *2 * SC020HGS_DATA_LANES) / 10
 #else
 #define SC020HGS_DEFAULT_CODE MEDIA_BUS_FMT_SBGGR8_1X8
-#define SC020_PIXEL_RATE 52800000ULL
+// #define SC020_PIXEL_RATE 52800000ULL
 #define SC020_LINK_FREQ 264000000ULL
+#define SC020_PIXEL_RATE (SC020_LINK_FREQ *2 * SC020HGS_DATA_LANES) / 8
 #endif
+
 
 #define SC020_REG_CHIP_ID_HI 0x3107 // default val is 0x3a
 #define SC020_REG_CHIP_ID_LO 0x3108 // default val is 0x7a
@@ -65,9 +70,9 @@ struct sc020_device {
 	struct regmap *regmap;
 	struct clk *clock;
 	struct gpio_desc *reset_gpio;
-	// struct regulator *avdd;
-	// struct regulator *dovdd;
-	// struct regulator *dvdd;
+	struct regulator *avdd;
+	struct regulator *dovdd;
+	struct regulator *dvdd;
 
 	struct v4l2_subdev sd;
 	struct media_pad pad;
@@ -123,14 +128,23 @@ static int sc020_write_reg(struct sc020_device *sc020, u16 reg, u8 val)
 
 static int sc020_read_reg(struct sc020_device *sc020, u16 reg, unsigned int *val)
 {
-	dbg("sc020_read_reg: reg=0x%04x\n", reg);
-	return regmap_read(sc020->regmap, reg, val);
+	int ret;
+
+	ret = regmap_read(sc020->regmap, reg, val);
+	if (ret) {
+		dev_err(sc020->dev, "read reg 0x%04x failed: %d\n", reg, ret);
+		return ret;
+	}
+
+	dev_dbg(sc020->dev, "read reg 0x%04x = 0x%02x\n", reg, *val);
+	return 0;
 }
 
 static int sc020_power_get_resources(struct sc020_device *sc020)
 {
 	struct device *dev = sc020->dev;
-	// bool reg_err;
+	bool reg_err;
+
 	dbg("sc020_power_get_resources");
 	sc020->clock = devm_clk_get(dev, NULL);
 	if (IS_ERR(sc020->clock))
@@ -141,20 +155,20 @@ static int sc020_power_get_resources(struct sc020_device *sc020)
 	if (IS_ERR(sc020->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(sc020->reset_gpio), "get reset GPIO failed\n");
 
-	// sc020->dovdd = devm_regulator_get_optional(dev, "dovdd");
-	// sc020->avdd = devm_regulator_get_optional(dev, "avdd");
-	// sc020->dvdd = devm_regulator_get_optional(dev, "dvdd");
-	// if (IS_ERR(sc020->dovdd) && PTR_ERR(sc020->dovdd) == -ENODEV)
-	// 	sc020->dovdd = NULL;
-	// if (IS_ERR(sc020->avdd) && PTR_ERR(sc020->avdd) == -ENODEV)
-	// 	sc020->avdd = NULL;
-	// if (IS_ERR(sc020->dvdd) && PTR_ERR(sc020->dvdd) == -ENODEV)
-	// 	sc020->dvdd = NULL;
+	sc020->dovdd = devm_regulator_get_optional(dev, "dovdd");
+	sc020->avdd = devm_regulator_get_optional(dev, "avdd");
+	sc020->dvdd = devm_regulator_get_optional(dev, "dvdd");
+	if (IS_ERR(sc020->dovdd) && PTR_ERR(sc020->dovdd) == -ENODEV)
+		sc020->dovdd = NULL;
+	if (IS_ERR(sc020->avdd) && PTR_ERR(sc020->avdd) == -ENODEV)
+		sc020->avdd = NULL;
+	if (IS_ERR(sc020->dvdd) && PTR_ERR(sc020->dvdd) == -ENODEV)
+		sc020->dvdd = NULL;
 
-	// reg_err = IS_ERR(sc020->dovdd) || IS_ERR(sc020->avdd) ||
-	// 	  IS_ERR(sc020->dvdd);
-	// if (reg_err)
-	// 	return dev_err_probe(dev, -EIO, "get regulator failed\n");
+	reg_err = IS_ERR(sc020->dovdd) || IS_ERR(sc020->avdd) ||
+		  IS_ERR(sc020->dvdd);
+	if (reg_err)
+		return dev_err_probe(dev, -EIO, "get regulator failed\n");
 
 	return 0;
 }
@@ -320,7 +334,7 @@ static int sc020_power_on(struct sc020_device *sc020)
 	}
 	// test
 	gpiod_set_value_cansleep(sc020->reset_gpio, 1);
-	fsleep(5000);
+	fsleep(10000);
 
 	gpiod_set_value_cansleep(sc020->reset_gpio, 0);
 	fsleep(5000);
@@ -340,13 +354,13 @@ static void sc020_power_off(struct sc020_device *sc020)
 
 	// fsleep(1000);
 
-	// if (!IS_ERR_OR_NULL(sc020->avdd))
-	// 	regulator_disable(sc020->avdd);
-	// if (!IS_ERR_OR_NULL(sc020->dvdd))
-	// 	regulator_disable(sc020->dvdd);
-	// if (!IS_ERR_OR_NULL(sc020->dovdd))
-	// 	regulator_disable(sc020->dovdd);
-	// clk_disable_unprepare(sc020->inclk);
+	if (!IS_ERR_OR_NULL(sc020->avdd))
+		regulator_disable(sc020->avdd);
+	if (!IS_ERR_OR_NULL(sc020->dvdd))
+		regulator_disable(sc020->dvdd);
+	if (!IS_ERR_OR_NULL(sc020->dovdd))
+		regulator_disable(sc020->dovdd);
+	clk_disable_unprepare(sc020->clock);
 
 	sc020->powered = false;
 }
@@ -477,7 +491,7 @@ static int sc020_init_controls(struct sc020_device *sc020)
 	// struct v4l2_ctrl *exposure;
 	// struct v4l2_ctrl *tp;
 	int ret;
-
+	dbg("sc020_init_controls, pixel rate %llu", SC020_PIXEL_RATE);
 	ret = v4l2_ctrl_handler_init(ctrl_hdl, 2);
 	if (ret)
 		return ret;
@@ -557,13 +571,15 @@ static int sc020_probe(struct i2c_client *client)
 	if (ret)
 		return ret;
 
-	ret  = sc020_read_reg(sc020, SC020_REG_CHIP_ID_HI, &id_hi);
-	dbg("sc020_probe: chip ID hi=0x%02x\n", id_hi);
-	ret |= sc020_read_reg(sc020, SC020_REG_CHIP_ID_LO, &id_lo);
-	dbg("sc020_probe: chip ID lo=0x%02x\n", id_lo);
+	ret = sc020_read_reg(sc020, SC020_REG_CHIP_ID_HI, &id_hi);
 	if (ret)
 		goto err_power_off;
 
+	ret = sc020_read_reg(sc020, SC020_REG_CHIP_ID_LO, &id_lo);
+	if (ret)
+		goto err_power_off;
+
+	dbg("sc020_probe: chip ID hi=0x%02x lo=0x%02x\n", id_hi, id_lo);
 	if (((id_hi << 8) | id_lo) != SC020_CHIP_ID) {
 		dev_err(sc020->dev, "chip ID mismatch: 0x%02x%02x (expect 0x%04x)\n",
 			id_hi, id_lo, SC020_CHIP_ID);
@@ -603,7 +619,7 @@ static int sc020_probe(struct i2c_client *client)
 	if (ret)
 		goto err_cleanup;
 
-	dev_info(sc020->dev, "sc020 probe done: 400x400@240fps RAW10 1-lane\n");
+	dev_info(sc020->dev, "sc020 probe done: 400x400@240fps RAW8 1-lane\n");
 	return 0;
 
 err_cleanup:
@@ -615,6 +631,7 @@ err_entity:
 	return ret;
 
 err_power_off:
+	dbg("sc020_probe: power off due to error\n");
 	sc020_power_off(sc020);
 	return ret;
 }

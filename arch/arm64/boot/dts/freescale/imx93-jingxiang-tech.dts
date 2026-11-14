@@ -665,6 +665,7 @@
 				remote-endpoint = <&mipi_csi_in>;
 				data-lanes = <1>;
 				clock-lanes = <0>;
+				link-frequencies = /bits/ 64 <264000000>;
 			};
 		};
 	};
@@ -1319,6 +1320,7 @@
 				remote-endpoint = <&sc020_out>;
 				data-lanes = <1>;
 				clock-lanes = <0>;
+				link-frequencies = /bits/ 64 <264000000>;
 			};
 		};
 
